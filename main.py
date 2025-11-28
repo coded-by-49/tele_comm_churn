@@ -79,7 +79,6 @@ class CustomerData(BaseModel):
 # ==========================================
 @app.post("/predict")
 def predict_churn(data: CustomerData):
-    print(data)
     if not model:
         raise HTTPException(status_code=500, detail="Model is not loaded.")
 
@@ -87,8 +86,6 @@ def predict_churn(data: CustomerData):
         # --- A. Convert JSON to DataFrame ---
         input_data = data.dict()
         input_df = pd.DataFrame([input_data])
-
-        print(input_df)
 
         # --- B. Feature Engineering (The Logic) ---
         # 1. Tenure Group
@@ -169,4 +166,5 @@ def home():
     return {"status": "active", "message": "Churn Prediction API is running."}
 
 if __name__ == "__main__":
+    port = 8000
     uvicorn.run(app, host="0.0.0.0", port=port)
