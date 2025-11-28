@@ -79,29 +79,35 @@ class CustomerData(BaseModel):
 # ==========================================
 @app.post("/predict")
 def predict_churn(data: CustomerData):
-    if not model:
+    if model is None:
         raise HTTPException(status_code=500, detail="Model is not loaded.")
 
     try:
-        # --- A. Convert JSON to DataFrame ---
+        print("1. Received Data")
         input_data = data.dict()
         input_df = pd.DataFrame([input_data])
 
-        # --- B. Feature Engineering (The Logic) ---
-        # 1. Tenure Group
+        print("2. Creating Tenure Group")
         bins = [0, 15, 48, 73]
         labels = ["New_customers", "Established_customers", "Loyal_customers"]
         input_df['Tenure_Group'] = pd.cut(input_df['tenure'], bins=bins, labels=labels, right=False)
 
-        # 2. Interactions
+        print("3. Creating HighRisk Interaction")
+        # CHECK THIS LINE CAREFULLY FOR 'and' vs '&'
         input_df['HighRisk_Interaction'] = ((input_df['Contract'] == 'Month-to-month') & 
                                            (input_df['InternetService'] == 'Fiber optic')).astype(int)
         
+        print("4. Creating Tenure_MonthlyCharges")
         input_df['Tenure_MonthlyCharges'] = input_df['tenure'] * input_df['MonthlyCharges']
         
+        print("5. Creating Fiber_Electronic")
+        # CHECK THIS LINE CAREFULLY FOR 'and' vs '&'
         input_df['Fiber_Electronic'] = ((input_df['InternetService'] == 'Fiber optic') & 
                                        (input_df['PaymentMethod'] == 'Electronic check')).astype(int)
 
+        print("6. Feature Engineering Done. Starting Encoding...")
+        encoded_df = pd.get_dummies(input_df)
+        
         # --- C. Encoding ---
         encoded_df = pd.get_dummies(input_df)
         
