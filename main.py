@@ -79,6 +79,7 @@ class CustomerData(BaseModel):
 # ==========================================
 @app.post("/predict")
 def predict_churn(data: CustomerData):
+    print(data)
     if not model:
         raise HTTPException(status_code=500, detail="Model is not loaded.")
 
@@ -86,6 +87,8 @@ def predict_churn(data: CustomerData):
         # --- A. Convert JSON to DataFrame ---
         input_data = data.dict()
         input_df = pd.DataFrame([input_data])
+
+        print(input_df)
 
         # --- B. Feature Engineering (The Logic) ---
         # 1. Tenure Group
