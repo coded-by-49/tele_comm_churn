@@ -1,42 +1,65 @@
-import uvicorn
-import joblib
 import pandas as pd
 import numpy as np
+import pickle
+import uvicorn
+import shap
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
-# Initialize App
-app = FastAPI()
+# ==========================================
+# 1. SETUP & GLOBAL VARIABLES
+# ==========================================
+app = FastAPI(title="Telco Churn API", description="Predicts customer churn based on 18 input features.")
 
-# --- CORS CONFIGURATION (Crucial for React connection) ---
+# Enable CORS (Allows your frontend to talk to this backend)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow your Vercel app to connect
+    allow_origins=["*"],  # In production, replace "*" with your frontend domain
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- 1. LOAD ARTIFACTS ---
-# Make sure these filenames match your uploaded files EXACTLY
-try:
-    model = joblib.load('tele_comm_churn_model_trained.pkl')
-    scaler = joblib.load('scaler.pkl')
-    model_columns = joblib.load('model_columns.pkl')
-    print("✅ All model files loaded successfully.")
-except FileNotFoundError as e:
-    print(f"❌ Error loading files: {e}. Check your filenames!")
-    model = None
+# Global variables to hold our model artifacts
+model = None
+scaler = None
+model_columns = None
+explainer = None
 
-# --- 2. DEFINE INPUT SCHEMA ---
-# This matches the JSON body sent by your React `handlePredict` function
+@app.on_event("startup")
+def load_artifacts():
+    global model, scaler, model_columns, explainer
+    try:
+        # Load the files you downloaded from Colab
+        # Ensure these files are in the same folder as main.py
+        with open('tele_churn_model.pkl', 'rb') as f:
+            model = pickle.load(f)
+        with open('scaler.pkl', 'rb') as f:
+            scaler = pickle.load(f)
+        with open('model_columns.pkl', 'rb') as f:
+            model_columns = pickle.load(f)
+            
+        # Initialize SHAP Explainer (We create this fresh using the loaded model)
+        print("⏳ Initializing SHAP explainer...")
+        explainer = shap.TreeExplainer(model)
+        
+        print("✅ Artifacts loaded successfully. Server is ready!")
+    except FileNotFoundError as e:
+        print(f"❌ Error: Could not load artifacts. {e}")
+        print("Make sure 'tele_churn_model.pkl', 'scaler.pkl', and 'model_columns.pkl' are in the root directory.")
+
+# ==========================================
+# 3. INPUT DATA MODEL (Pydantic)
+# ==========================================
 class CustomerData(BaseModel):
+    # This matches the schema we gave the Frontend Developer
     gender: str
-    SeniorCitizen: int  # React sends 1 or 0
+    SeniorCitizen: int
     Partner: str
     Dependents: str
     tenure: int
-    PhoneService: str
+    PhoneService: str = "Yes" # Default if missing
     MultipleLines: str
     InternetService: str
     OnlineSecurity: str
@@ -51,83 +74,96 @@ class CustomerData(BaseModel):
     MonthlyCharges: float
     TotalCharges: float
 
-# --- 3. PREDICTION ENDPOINT ---
+# ==========================================
+# 4. PREDICTION ENDPOINT
+# ==========================================
 @app.post("/predict")
 def predict_churn(data: CustomerData):
     if not model:
-        raise HTTPException(status_code=500, detail="Model files not found on server.")
+        raise HTTPException(status_code=500, detail="Model is not loaded.")
 
     try:
+        # --- A. Convert JSON to DataFrame ---
         input_data = data.dict()
-        df = pd.DataFrame([input_data])
-        
-        bins = [0,15,48,73]
+        input_df = pd.DataFrame([input_data])
+
+        # --- B. Feature Engineering (The Logic) ---
+        # 1. Tenure Group
+        bins = [0, 15, 48, 73]
         labels = ["New_customers", "Established_customers", "Loyal_customers"]
-        df['Tenure_Group'] = pd.cut(df['tenure'], bins=bins, labels=labels, right=False)
-    
-        if pd.isna(df['Tenure_Group'].iloc[0]):
-            df['Tenure_Group'] = "New_customers"
+        input_df['Tenure_Group'] = pd.cut(input_df['tenure'], bins=bins, labels=labels, right=False)
 
-        df['HighRisk_Interaction'] = ((df['Contract'] == 'Month-to-month') & 
-                                      (df['InternetService'] == 'Fiber optic')).astype(int)
-
-        # 3. Tenure_MonthlyCharges
-        df['Tenure_MonthlyCharges'] = df['tenure'] * df['MonthlyCharges']
-
-        # 4. Fiber_Electronic (Replicating your specific engineered feature)
-        # Logic: Fiber optic AND Electronic check
-        df['Fiber_Electronic'] = ((df['InternetService'] == 'Fiber optic') & 
-                                  (df['PaymentMethod'] == 'Electronic check')).astype(int)
-
-        # ==========================================
-        # C. ENCODING & SCALING
-        # ==========================================
-
-        # 1. One-Hot Encoding
-        # This converts "InternetService" -> "InternetService_Fiber optic", etc.
-        df_encoded = pd.get_dummies(df)
-
-        # 2. ALIGN COLUMNS (The most critical step)
-        # This ensures the dataframe has the EXACT same columns as x_train
-        # It adds missing columns (filling with 0) and removes unexpected ones.
-        df_final = df_encoded.reindex(columns=model_columns, fill_value=0)
-
-        # 3. Scale Data
-        # Using the scaler you saved to transform the row
-        df_scaled = scaler.transform(df_final)
-
-        # ==========================================
-        # D. PREDICTION
-        # ==========================================
+        # 2. Interactions
+        input_df['HighRisk_Interaction'] = ((input_df['Contract'] == 'Month-to-month') & 
+                                           (input_df['InternetService'] == 'Fiber optic')).astype(int)
         
-        # Get probability (0.0 to 1.0)
-        prob = model.predict_proba(df_scaled)[:, 1][0]
+        input_df['Tenure_MonthlyCharges'] = input_df['tenure'] * input_df['MonthlyCharges']
         
-        # Apply your threshold (0.4)
-        prediction_label = "Churn" if prob >= 0.4 else "No Churn"
+        input_df['Fiber_Electronic'] = ((input_df['InternetService'] == 'Fiber optic') & 
+                                       (input_df['PaymentMethod'] == 'Electronic check')).astype(int)
 
-        # ==========================================
-        # E. CONSTRUCT RESPONSE (For React)
-        # ==========================================
+        # --- C. Encoding ---
+        encoded_df = pd.get_dummies(input_df)
         
-        # We construct a simple mock SHAP response because calculating real SHAP 
-        # on a live server is very slow and often crashes free tier servers.
-        # This allows your frontend visualization to work perfectly.
-        mock_shap = [
-            {"feature": "Contract Type", "impact": 0.5 if df['Contract'].iloc[0] == 'Month-to-month' else -0.5},
-            {"feature": "Tenure", "impact": -0.4 if df['tenure'].iloc[0] > 24 else 0.4},
-            {"feature": "Monthly Charges", "impact": 0.3 if df['MonthlyCharges'].iloc[0] > 70 else -0.2}
-        ]
+        # Boolean cleanup
+        bool_cols = encoded_df.select_dtypes(include="bool").columns
+        encoded_df[bool_cols] = encoded_df[bool_cols].astype(int)
+
+        # --- D. Alignment (CRITICAL) ---
+        # Force columns to match the training data exactly
+        encoded_df = encoded_df.reindex(columns=model_columns, fill_value=0)
+
+        # --- E. Scaling ---
+        # Apply scaling to the known numerical columns
+        numerical_cols = ["tenure", "MonthlyCharges", "TotalCharges", "Tenure_MonthlyCharges"]
+        encoded_df[numerical_cols] = scaler.transform(encoded_df[numerical_cols])
+
+        # --- F. Prediction ---
+        prediction_binary = model.predict(encoded_df)[0] # 0 or 1
+        probability = model.predict_proba(encoded_df)[0][1] # 0.0 to 1.0
+
+        # Output Text
+        prediction_label = "Churn" if prediction_binary == 1 else "No Churn"
+        
+        # --- G. SHAP Explanation (Why did they churn?) ---
+        # We calculate SHAP values for this specific person
+        shap_values = explainer.shap_values(encoded_df)
+        
+        # Handle different SHAP output formats (Binary classification usually returns a list of 2 arrays)
+        if isinstance(shap_values, list):
+            # Index 1 is the positive class (Churn)
+            person_shap_values = shap_values[1][0] 
+        else:
+            person_shap_values = shap_values[0]
+
+        # Pair feature names with their impact scores
+        feature_importance = list(zip(model_columns, person_shap_values))
+        
+        # Sort by absolute impact (Magnitude matters more than direction for "Importance")
+        feature_importance.sort(key=lambda x: abs(x[1]), reverse=True)
+        
+        # Get Top 3 Drivers
+        top_factors = []
+        for feature, impact in feature_importance[:3]:
+            direction = "Increases Risk" if impact > 0 else "Decreases Risk"
+            top_factors.append({
+                "feature": feature,
+                "impact_score": round(float(impact), 4),
+                "effect": direction
+            })
 
         return {
-            "probability": float(prob),
-            "shap_factors": mock_shap
+            "prediction": prediction_label,
+            "churn_probability": round(float(probability), 4),
+            "risk_factors": top_factors
         }
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Prediction Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/")
+def home():
+    return {"status": "active", "message": "Churn Prediction API is running."}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=port)
