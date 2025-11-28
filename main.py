@@ -108,60 +108,64 @@ def predict_churn(data: CustomerData):
         print("6. Feature Engineering Done. Starting Encoding...")
         encoded_df = pd.get_dummies(input_df)
         
-        # --- C. Encoding ---
+        print("7. One-hot encoding")
+        # --- C. Encoding --- (issue block )
         encoded_df = pd.get_dummies(input_df)
         
+        print("8. Changing datatype for new one-hot encoded features")
         # Boolean cleanup
         bool_cols = encoded_df.select_dtypes(include="bool").columns
         encoded_df[bool_cols] = encoded_df[bool_cols].astype(int)
 
         # --- D. Alignment (CRITICAL) ---
         # Force columns to match the training data exactly
+        print("9 reordering column arrangment of data")
         encoded_df = encoded_df.reindex(columns=model_columns, fill_value=0)
 
         # --- E. Scaling ---
-        # Apply scaling to the known numerical columns
+        print("9 Scaling discerete numerical features ")
         numerical_cols = ["tenure", "MonthlyCharges", "TotalCharges", "Tenure_MonthlyCharges"]
         encoded_df[numerical_cols] = scaler.transform(encoded_df[numerical_cols])
 
         # --- F. Prediction ---
+        print("9 Making prediction ")
         prediction_binary = model.predict(encoded_df)[0] # 0 or 1
         probability = model.predict_proba(encoded_df)[0][1] # 0.0 to 1.0
 
         # Output Text
         prediction_label = "Churn" if prediction_binary == 1 else "No Churn"
         
-        # --- G. SHAP Explanation (Why did they churn?) ---
-        # We calculate SHAP values for this specific person
-        shap_values = explainer.shap_values(encoded_df)
+        # # --- G. SHAP Explanation (Why did they churn?) ---
+        # # We calculate SHAP values for this specific person
+        # shap_values = explainer.shap_values(encoded_df)
         
-        # Handle different SHAP output formats (Binary classification usually returns a list of 2 arrays)
-        if isinstance(shap_values, list):
-            # Index 1 is the positive class (Churn)
-            person_shap_values = shap_values[1][0] 
-        else:
-            person_shap_values = shap_values[0]
+        # # Handle different SHAP output formats (Binary classification usually returns a list of 2 arrays)
+        # if isinstance(shap_values, list):
+        #     # Index 1 is the positive class (Churn)
+        #     person_shap_values = shap_values[1][0] 
+        # else:
+        #     person_shap_values = shap_values[0]
 
-        # Pair feature names with their impact scores
-        feature_importance = list(zip(model_columns, person_shap_values))
+        # # Pair feature names with their impact scores
+        # feature_importance = list(zip(model_columns, person_shap_values))
         
-        # Sort by absolute impact (Magnitude matters more than direction for "Importance")
-        feature_importance.sort(key=lambda x: abs(x[1]), reverse=True)
+        # # Sort by absolute impact (Magnitude matters more than direction for "Importance")
+        # feature_importance.sort(key = lambda x: abs(x[1]), reverse=True)
         
-        # Get Top 3 Drivers
-        top_factors = []
-        for feature, impact in feature_importance[:3]:
-            direction = "Increases Risk" if impact > 0 else "Decreases Risk"
-            top_factors.append({
-                "feature": feature,
-                "impact_score": round(float(impact), 4),
-                "effect": direction
-            })
+        # # Get Top 3 Drivers
+        # top_factors = []
+        # for feature, impact in feature_importance[:3]:
+        #     direction = "Increases Risk" if impact > 0 else "Decreases Risk"
+        #     top_factors.append({
+        #         "feature": feature,
+        #         "impact_score": round(float(impact), 4),
+        #         "effect": direction
+        #     })
 
         return {
             "prediction": prediction_label,
             "churn_probability": round(float(probability), 4),
-            "risk_factors": top_factors
+            # "risk_factors": top_factors
         }
 
     except Exception as e:
