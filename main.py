@@ -31,35 +31,30 @@ explainer = None
 def load_artifacts():
     global model, scaler, model_columns, explainer
     try:
-        # Load the files you downloaded from Colab
-        # Ensure these files are in the same folder as main.py
         with open('tele_churn_model.pkl', 'rb') as f:
             model = pickle.load(f)
         with open('scaler.pkl', 'rb') as f:
             scaler = pickle.load(f)
         with open('model_columns.pkl', 'rb') as f:
             model_columns = pickle.load(f)
-            
-        # Initialize SHAP Explainer (We create this fresh using the loaded model)
-        print("⏳ Initializing SHAP explainer...")
+    
+        print("Initializing SHAP explainer...")
         explainer = shap.TreeExplainer(model)
         
-        print("✅ Artifacts loaded successfully. Server is ready!")
+        print("____Artifacts loaded successfully. Server is ready!")
+
     except FileNotFoundError as e:
-        print(f"❌ Error: Could not load artifacts. {e}")
+        print(f"!!! Error: Could not load artifacts. {e}")
         print("Make sure 'tele_churn_model.pkl', 'scaler.pkl', and 'model_columns.pkl' are in the root directory.")
 
-# ==========================================
-# 3. INPUT DATA MODEL (Pydantic)
-# ==========================================
+
 class CustomerData(BaseModel):
-    # This matches the schema we gave the Frontend Developer
     gender: str
     SeniorCitizen: int
     Partner: str
     Dependents: str
     tenure: int
-    PhoneService: str = "Yes" # Default if missing
+    PhoneService: str = "Yes" 
     MultipleLines: str
     InternetService: str
     OnlineSecurity: str
@@ -74,9 +69,7 @@ class CustomerData(BaseModel):
     MonthlyCharges: float
     TotalCharges: float
 
-# ==========================================
-# 4. PREDICTION ENDPOINT
-# ==========================================
+
 @app.post("/predict")
 def predict_churn(data: CustomerData):
     if model is None:
@@ -93,7 +86,7 @@ def predict_churn(data: CustomerData):
         input_df['Tenure_Group'] = pd.cut(input_df['tenure'], bins=bins, labels=labels, right=False)
 
         print("3. Creating HighRisk Interaction")
-        # CHECK THIS LINE CAREFULLY FOR 'and' vs '&'
+    
         input_df['HighRisk_Interaction'] = ((input_df['Contract'] == 'Month-to-month') & 
                                            (input_df['InternetService'] == 'Fiber optic')).astype(int)
         
@@ -101,7 +94,7 @@ def predict_churn(data: CustomerData):
         input_df['Tenure_MonthlyCharges'] = input_df['tenure'] * input_df['MonthlyCharges']
         
         print("5. Creating Fiber_Electronic")
-        # CHECK THIS LINE CAREFULLY FOR 'and' vs '&'
+
         input_df['Fiber_Electronic'] = ((input_df['InternetService'] == 'Fiber optic') & 
                                        (input_df['PaymentMethod'] == 'Electronic check')).astype(int)
 
@@ -109,7 +102,7 @@ def predict_churn(data: CustomerData):
         encoded_df = pd.get_dummies(input_df)
         
         print("7. One-hot encoding")
-        # --- C. Encoding --- (issue block )
+
         encoded_df = pd.get_dummies(input_df)
         
         print("8. Changing datatype for new one-hot encoded features")
@@ -117,66 +110,85 @@ def predict_churn(data: CustomerData):
         bool_cols = encoded_df.select_dtypes(include="bool").columns
         encoded_df[bool_cols] = encoded_df[bool_cols].astype(int)
 
-        # --- D. Alignment (CRITICAL) ---
-        # Force columns to match the training data exactly
+
         print("9 reordering column arrangment of data")
         encoded_df = encoded_df.reindex(columns=model_columns, fill_value=0)
 
-        # --- E. Scaling ---
+
         print("10 Scaling discerete numerical features ")
         numerical_cols = ["tenure", "MonthlyCharges", "TotalCharges", "Tenure_MonthlyCharges"]
         encoded_df[numerical_cols] = scaler.transform(encoded_df[numerical_cols])
 
-        # --- F. Prediction ---
         print("11 Making prediction ")
         prediction_binary = model.predict(encoded_df)[0] # 0 or 1
         probability = model.predict_proba(encoded_df)[0][1] # 0.0 to 1.0
 
-        # Output Text
+
         prediction_label = "Churn" if prediction_binary == 1 else "No Churn"
         
         print(f"this is the prediciton made for this customer {prediction_label}, This is a prediction_binary {probability*100}")
 
-        # --- 3. ROBUST SHAP (The Safety Valve) ---
-        shap_factors = [] # Default to empty if SHAP fails
+    
+        shap_factors = [] 
         
         try:
-            # We use the TreeExplainer we loaded at startup
+            print("\n=== SHAP COMPUTATION STARTED ===")
+
             shap_values = explainer.shap_values(encoded_df)
-            
+            print("1) Successfully created shap_values")
+            print(f"   -> shap_values type: {type(shap_values)}")
+
             # CRITICAL FIX: Handle different return types from SHAP
-            # Binary classification usually returns a list of two arrays: [NegativeClass, PositiveClass]
+            print("2) Checking if shap_values is a list (binary classification)...")
+
             if isinstance(shap_values, list):
-                # We want index 1 (The Churn Class)
+                print("   -> shap_values is a LIST")
+                print(f"   -> List length: {len(shap_values)}")
+                
+                # We want index 1 (Positive class: Churn)
                 vals = shap_values[1]
+                print("   -> Using shap_values[1] for positive class")
+
             else:
+                print("   -> shap_values is NOT a list (single output model)")
                 vals = shap_values
 
-            # If the result is a 2D array (1 sample, N features), flatten it
+            print(f"3) Shape of vals before flattening: {vals.shape}")
+
+            # If the result is a 2D array and only one row (1 sample, N features), flatten it
             if len(vals.shape) == 2:
+                print("   -> vals is 2D, flattening...")
                 vals = vals[0]
 
-            # Create the list of factors
+            print(f"   -> Shape of vals after flattening: {vals.shape}")
+
+            # Combine each column name with its SHAP value
+            print("4) Zipping model_columns with SHAP values...")
             feature_importance = list(zip(model_columns, vals))
+
+            print("5) Sorting factors by absolute impact...")
             feature_importance.sort(key=lambda x: abs(float(x[1])), reverse=True)
-            
+
+            print("6) Selecting top 3 factors...")
+
             # Take top 3
             for feature, impact in feature_importance[:3]:
+                print(f"   -> Adding factor: {feature} (impact={impact})")
                 shap_factors.append({
                     "feature": feature,
-                    "impact": float(impact) # Your frontend uses 'impact' to calculate bar width
+                    "impact": float(impact)  # Frontend uses 'impact'
                 })
+
+            print("=== SHAP COMPUTATION COMPLETED SUCCESSFULLY ===\n")
+
                 
         except Exception as e:
-            # If SHAP fails, print error to console but DO NOT CRASH the app
             print(f"⚠️ SHAP Logic Failed: {str(e)}")
-            # We just leave shap_factors as empty []
 
-        # --- 4. RETURN RESULT ---
         return {
             "prediction": prediction_label,
-            "probability": probability,       # <--- FIXED: Matches frontend 'result.probability'
-            "shap_factors": shap_factors      # <--- FIXED: Returns list or empty list
+            "probability": probability,      
+            "shap_factors": shap_factors     
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
