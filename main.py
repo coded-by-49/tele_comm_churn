@@ -129,61 +129,62 @@ def predict_churn(data: CustomerData):
         print(f"this is the prediciton made for this customer {prediction_label}, This is a prediction_binary {probability*100}")
 
     
+        # --- 3. ROBUST SHAP (Fixed for 3D Arrays) ---
         shap_factors = [] 
         
         try:
             print("\n=== SHAP COMPUTATION STARTED ===")
-
+            
+            # 1. Calculate values
             shap_values = explainer.shap_values(encoded_df)
-            print("1) Successfully created shap_values")
-            print(f"   -> shap_values type: {type(shap_values)}")
+            print(f" -> Raw shap_values type: {type(shap_values)}")
 
-            # CRITICAL FIX: Handle different return types from SHAP
-            print("2) Checking if shap_values is a list (binary classification)...")
-
+            # 2. Normalize to a numpy array (Handle list return type)
             if isinstance(shap_values, list):
-                print("   -> shap_values is a LIST")
-                print(f"   -> List length: {len(shap_values)}")
-                
-                # We want index 1 (Positive class: Churn)
+                # If it's a list, it usually separates classes [Class0_Array, Class1_Array]
+                # We want Class 1 (Churn)
                 vals = shap_values[1]
-                print("   -> Using shap_values[1] for positive class")
-
             else:
-                print("   -> shap_values is NOT a list (single output model)")
                 vals = shap_values
 
-            print(f"3) Shape of vals before flattening: {vals.shape}")
+            print(f" -> Shape before slicing: {vals.shape}")
 
-            # If the result is a 2D array and only one row (1 sample, N features), flatten it
-            if len(vals.shape) == 2:
-                print("   -> vals is 2D, flattening...")
+            # 3. CRITICAL FIX: Handle (1, 34, 2) Shape
+            # Shape format is: (Samples, Features, Classes)
+            if len(vals.shape) == 3:
+                print(" -> Detected 3D Array (Sample, Feature, Class)")
+                # Slice: 
+                # [0] = The first (and only) customer
+                # [:] = All 34 features
+                # [1] = The Positive Class (Churn)
+                vals = vals[0, :, 1]
+            
+            # Handle (1, 34) Shape (If it was already 2D)
+            elif len(vals.shape) == 2:
+                print(" -> Detected 2D Array (Sample, Feature)")
                 vals = vals[0]
 
-            print(f"   -> Shape of vals after flattening: {vals.shape}")
+            print(f" -> Final Shape (must be (34,)): {vals.shape}")
 
-            # Combine each column name with its SHAP value
-            print("4) Zipping model_columns with SHAP values...")
+            # 4. Create Feature Importance List
             feature_importance = list(zip(model_columns, vals))
 
-            print("5) Sorting factors by absolute impact...")
+            # 5. Sort by Magnitude (Absolute value)
             feature_importance.sort(key=lambda x: abs(float(x[1])), reverse=True)
 
-            print("6) Selecting top 3 factors...")
-
-            # Take top 3
+            # 6. Extract Top 3
             for feature, impact in feature_importance[:3]:
-                print(f"   -> Adding factor: {feature} (impact={impact})")
                 shap_factors.append({
                     "feature": feature,
-                    "impact": float(impact)  # Frontend uses 'impact'
+                    "impact": float(impact) 
                 })
 
-            print("=== SHAP COMPUTATION COMPLETED SUCCESSFULLY ===\n")
+            print("=== SHAP SUCCESS ===\n")
 
-                
         except Exception as e:
+            # Fallback (Log error but don't crash app)
             print(f"⚠️ SHAP Logic Failed: {str(e)}")
+            shap_factors = []
 
         return {
             "prediction": prediction_label,
