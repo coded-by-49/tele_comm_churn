@@ -7,15 +7,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
-# ==========================================
-# 1. SETUP & GLOBAL VARIABLES
-# ==========================================
+
 app = FastAPI(title="Telco Churn API", description="Predicts customer churn based on 18 input features.")
 
-# Enable CORS (Allows your frontend to talk to this backend)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace "*" with your frontend domain
+    allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -135,22 +132,19 @@ def predict_churn(data: CustomerData):
         try:
             print("\n=== SHAP COMPUTATION STARTED ===")
             
-            # 1. Calculate values
             shap_values = explainer.shap_values(encoded_df)
             print(f" -> Raw shap_values type: {type(shap_values)}")
 
-            # 2. Normalize to a numpy array (Handle list return type)
+       
             if isinstance(shap_values, list):
-                # If it's a list, it usually separates classes [Class0_Array, Class1_Array]
-                # We want Class 1 (Churn)
+
                 vals = shap_values[1]
             else:
                 vals = shap_values
 
             print(f" -> Shape before slicing: {vals.shape}")
 
-            # 3. CRITICAL FIX: Handle (1, 34, 2) Shape
-            # Shape format is: (Samples, Features, Classes)
+
             if len(vals.shape) == 3:
                 print(" -> Detected 3D Array (Sample, Feature, Class)")
                 # Slice: 
