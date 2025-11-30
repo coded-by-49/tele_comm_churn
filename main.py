@@ -137,38 +137,47 @@ def predict_churn(data: CustomerData):
         
         print(f"this is the prediciton made for this customer {prediction_label}, This is a prediction_binary {probability*100}")
 
-        # # --- G. SHAP Explanation (Why did they churn?) ---
-        # # We calculate SHAP values for this specific person
-        # shap_values = explainer.shap_values(encoded_df)
+        # --- 3. ROBUST SHAP (The Safety Valve) ---
+        shap_factors = [] # Default to empty if SHAP fails
         
-        # # Handle different SHAP output formats (Binary classification usually returns a list of 2 arrays)
-        # if isinstance(shap_values, list):
-        #     # Index 1 is the positive class (Churn)
-        #     person_shap_values = shap_values[1][0] 
-        # else:
-        #     person_shap_values = shap_values[0]
+        try:
+            # We use the TreeExplainer we loaded at startup
+            shap_values = explainer.shap_values(encoded_df)
+            
+            # CRITICAL FIX: Handle different return types from SHAP
+            # Binary classification usually returns a list of two arrays: [NegativeClass, PositiveClass]
+            if isinstance(shap_values, list):
+                # We want index 1 (The Churn Class)
+                vals = shap_values[1]
+            else:
+                vals = shap_values
 
-        # # Pair feature names with their impact scores
-        # feature_importance = list(zip(model_columns, person_shap_values))
-        
-        # # Sort by absolute impact (Magnitude matters more than direction for "Importance")
-        # feature_importance.sort(key = lambda x: abs(x[1]), reverse=True)
-        
-        # # Get Top 3 Drivers
-        # top_factors = []
-        # for feature, impact in feature_importance[:3]:
-        #     direction = "Increases Risk" if impact > 0 else "Decreases Risk"
-        #     top_factors.append({
-        #         "feature": feature,
-        #         "impact_score": round(float(impact), 4),
-        #         "effect": direction
-        #     })
+            # If the result is a 2D array (1 sample, N features), flatten it
+            if len(vals.shape) == 2:
+                vals = vals[0]
 
+            # Create the list of factors
+            feature_importance = list(zip(model_columns, vals))
+            feature_importance.sort(key=lambda x: abs(float(x[1])), reverse=True)
+            
+            # Take top 3
+            for feature, impact in feature_importance[:3]:
+                shap_factors.append({
+                    "feature": feature,
+                    "impact": float(impact) # Your frontend uses 'impact' to calculate bar width
+                })
+                
+        except Exception as e:
+            # If SHAP fails, print error to console but DO NOT CRASH the app
+            print(f"⚠️ SHAP Logic Failed: {str(e)}")
+            # We just leave shap_factors as empty []
+
+        # --- 4. RETURN RESULT ---
         return {
             "prediction": prediction_label,
-            "probability": round(float(probability), 4),
+            "probability": probability,       # <--- FIXED: Matches frontend 'result.probability'
+            "shap_factors": shap_factors      # <--- FIXED: Returns list or empty list
         }
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
