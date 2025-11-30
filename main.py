@@ -166,7 +166,7 @@ def predict_churn(data: CustomerData):
 
         return {
             "prediction": prediction_label,
-            "churn_probability": round(float(probability), 4),
+            "probability": round(float(probability), 4),
         }
 
     except Exception as e:
