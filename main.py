@@ -123,18 +123,20 @@ def predict_churn(data: CustomerData):
         encoded_df = encoded_df.reindex(columns=model_columns, fill_value=0)
 
         # --- E. Scaling ---
-        print("9 Scaling discerete numerical features ")
+        print("10 Scaling discerete numerical features ")
         numerical_cols = ["tenure", "MonthlyCharges", "TotalCharges", "Tenure_MonthlyCharges"]
         encoded_df[numerical_cols] = scaler.transform(encoded_df[numerical_cols])
 
         # --- F. Prediction ---
-        print("9 Making prediction ")
+        print("11 Making prediction ")
         prediction_binary = model.predict(encoded_df)[0] # 0 or 1
         probability = model.predict_proba(encoded_df)[0][1] # 0.0 to 1.0
 
         # Output Text
         prediction_label = "Churn" if prediction_binary == 1 else "No Churn"
         
+        print(f"this is the prediciton made for this customer {prediction_label}, This is a prediction_binary {probability*100}")
+
         # # --- G. SHAP Explanation (Why did they churn?) ---
         # # We calculate SHAP values for this specific person
         # shap_values = explainer.shap_values(encoded_df)
@@ -165,7 +167,6 @@ def predict_churn(data: CustomerData):
         return {
             "prediction": prediction_label,
             "churn_probability": round(float(probability), 4),
-            # "risk_factors": top_factors
         }
 
     except Exception as e:
